@@ -4,6 +4,7 @@ import re
 import os
 from http.server import BaseHTTPRequestHandler
 import json
+from urllib.parse import urlparse, parse_qs
 
 def list_split(items, n):
     return [items[i:i + n] for i in range(0, len(items), n)]
@@ -62,7 +63,7 @@ class handler(BaseHTTPRequestHandler):
             else:
                 return None
         else:
-            # 未配置环境变量时，允许所有域名（等同于 *）
+            # 未配置环境变量时，允许所有域名（相当于 *）
             return '*'
 
     def _set_cors_headers(self):
@@ -78,22 +79,32 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        # 解析 URL: 期望格式 /api/?username
-        # 提取问号后面的部分作为用户名
-        path = self.path
+        # 解析用户名：优先从查询字符串中直接取值（格式：/api?username）
+        parsed = urlparse(self.path)
+        query_params = parse_qs(parsed.query)
         user = None
-        if '?' in path:
-            # 取第一个 ? 之后的所有内容
-            query = path.split('?', 1)[1]
-            # 如果查询字符串不为空，且不以 & 开头（即没有其他参数），则整个 query 就是用户名
-            # 如果包含 &，可能用户错误地传了多个参数，我们只取第一个 & 之前的部分作为用户名
-            if query:
-                user = query.split('&')[0]  # 去掉可能的额外参数
+        
+        # 方式1：查询参数无键名的情况（例如 /api?octocat）
+        # parse_qs 会将无键名的参数放入空字符串键中，如 {'': ['octocat']}
+        if '' in query_params and query_params['']:
+            user = query_params[''][0]
+        
+        # 方式2：如果有显式的 user=xxx（向后兼容）
+        if not user and 'user' in query_params:
+            user = query_params['user'][0]
+        
+        # 方式3：路径参数 /api/username
+        if not user:
+            path = parsed.path.rstrip('/')
+            parts = [p for p in path.split('/') if p]
+            if parts and parts[-1] != 'api':   # 最后一段不是 api 本身
+                user = parts[-1]
+        
         if not user:
             self.send_response(400)
             self._set_cors_headers()
             self.end_headers()
-            self.wfile.write(json.dumps({"error": "Missing username in query string, expected /api/?username"}).encode('utf-8'))
+            self.wfile.write(json.dumps({"error": "Missing username in query or path"}).encode('utf-8'))
             return
 
         data = getdata(user)
