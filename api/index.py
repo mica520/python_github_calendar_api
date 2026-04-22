@@ -4,7 +4,7 @@ import re
 import os
 from http.server import BaseHTTPRequestHandler
 import json
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, unquote
 
 def list_split(items, n):
     return [items[i:i + n] for i in range(0, len(items), n)]
@@ -51,7 +51,6 @@ def getdata(name):
 
 class handler(BaseHTTPRequestHandler):
     def _get_allowed_origin(self):
-        """根据请求的 Origin 判断是否允许跨域，返回允许的 Origin 或 None"""
         origin = self.headers.get('Origin')
         if not origin:
             return None
@@ -60,11 +59,8 @@ class handler(BaseHTTPRequestHandler):
             allowed = [o.strip() for o in allowed_origins_env.split(',')]
             if origin in allowed:
                 return origin
-            else:
-                return None
-        else:
-            # 未配置环境变量时，允许所有域名（相当于 *）
-            return '*'
+            return None
+        return '*'
 
     def _set_cors_headers(self):
         allowed_origin = self._get_allowed_origin()
@@ -79,26 +75,29 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        # 解析用户名：优先从查询字符串中直接取值（格式：/api?username）
-        parsed = urlparse(self.path)
-        query_params = parse_qs(parsed.query)
+        # 解析用户名
         user = None
+        parsed = urlparse(self.path)
+        raw_query = parsed.query  # 例如 "octocat" 或 "user=xxx"
         
-        # 方式1：查询参数无键名的情况（例如 /api?octocat）
-        # parse_qs 会将无键名的参数放入空字符串键中，如 {'': ['octocat']}
-        if '' in query_params and query_params['']:
-            user = query_params[''][0]
+        # 方式1：查询字符串直接是用户名（无等号，且非空）
+        if raw_query and '=' not in raw_query:
+            user = unquote(raw_query)  # 解码 URL 编码
         
-        # 方式2：如果有显式的 user=xxx（向后兼容）
-        if not user and 'user' in query_params:
-            user = query_params['user'][0]
+        # 方式2：显式参数 ?user=xxx （向后兼容）
+        if not user and raw_query:
+            # 手动解析简单 key=value，避免 parse_qs 的空键问题
+            if '=' in raw_query:
+                parts = raw_query.split('=', 1)
+                if parts[0] == 'user' and parts[1]:
+                    user = unquote(parts[1])
         
         # 方式3：路径参数 /api/username
         if not user:
             path = parsed.path.rstrip('/')
             parts = [p for p in path.split('/') if p]
-            if parts and parts[-1] != 'api':   # 最后一段不是 api 本身
-                user = parts[-1]
+            if parts and parts[-1] != 'api':
+                user = unquote(parts[-1])
         
         if not user:
             self.send_response(400)
@@ -106,9 +105,10 @@ class handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({"error": "Missing username in query or path"}).encode('utf-8'))
             return
-
+        
+        # 获取数据
         data = getdata(user)
-
+        
         self.send_response(200)
         self._set_cors_headers()
         self.send_header('Content-type', 'application/json')
