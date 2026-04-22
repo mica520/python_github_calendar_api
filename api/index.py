@@ -54,7 +54,6 @@ class handler(BaseHTTPRequestHandler):
         origin = self.headers.get('Origin')
         if not origin:
             return None
-        # 从环境变量读取允许的域名列表，格式：https://a.com,https://b.com
         allowed_origins_env = os.environ.get('CORS_ALLOWED_ORIGINS', '')
         if allowed_origins_env:
             allowed = [o.strip() for o in allowed_origins_env.split(',')]
@@ -67,13 +66,9 @@ class handler(BaseHTTPRequestHandler):
             return '*'
 
     def _set_cors_headers(self):
-        """设置 CORS 响应头，动态允许特定域名"""
         allowed_origin = self._get_allowed_origin()
         if allowed_origin:
             self.send_header('Access-Control-Allow-Origin', allowed_origin)
-        else:
-            # 如果不允许该域名，不发送 Access-Control-Allow-Origin，浏览器会拒绝
-            pass
         self.send_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
 
@@ -83,20 +78,22 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        # 解析路径参数：从 URL 中提取最后一段作为用户名
-        # 例如 /api/calendar/octocat -> octocat
-        path = self.path.split('?')[0]  # 去掉查询参数
-        parts = [p for p in path.split('/') if p]
-        if not parts:
-            user = None
-        else:
-            user = parts[-1]  # 取最后一段
-
+        # 解析 URL: 期望格式 /api/?username
+        # 提取问号后面的部分作为用户名
+        path = self.path
+        user = None
+        if '?' in path:
+            # 取第一个 ? 之后的所有内容
+            query = path.split('?', 1)[1]
+            # 如果查询字符串不为空，且不以 & 开头（即没有其他参数），则整个 query 就是用户名
+            # 如果包含 &，可能用户错误地传了多个参数，我们只取第一个 & 之前的部分作为用户名
+            if query:
+                user = query.split('&')[0]  # 去掉可能的额外参数
         if not user:
             self.send_response(400)
             self._set_cors_headers()
             self.end_headers()
-            self.wfile.write(json.dumps({"error": "Missing username in path"}).encode('utf-8'))
+            self.wfile.write(json.dumps({"error": "Missing username in query string, expected /api/?username"}).encode('utf-8'))
             return
 
         data = getdata(user)
